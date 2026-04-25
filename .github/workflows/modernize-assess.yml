@@ -1,8 +1,8 @@
 name: Modernize Assess (headless)
 
 # Headless / non-interactive run of the GitHub Copilot modernization agent.
-# - Manual trigger for live demos.
-# - Scheduled weekly trigger to demonstrate CI/CD usage.
+# Based on the official Microsoft docs:
+# https://learn.microsoft.com/en-us/azure/developer/github-copilot-app-modernization/modernization-agent/cicd-integration?tabs=github-actions
 on:
   workflow_dispatch:
     inputs:
@@ -15,8 +15,10 @@ on:
     - cron: "0 6 * * 1"
 
 permissions:
+  id-token: write
   contents: read
   issues: write
+  actions: read
 
 env:
   # Env vars take the highest precedence in the modernize CLI config chain.
@@ -29,98 +31,45 @@ env:
 jobs:
   assess:
     name: Run headless assessment
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install modernization agent (winget)
-        shell: pwsh
+      - name: Download Modernize CLI
         run: |
-          $ErrorActionPreference = 'Stop'
-
-          # Primary install path — silent winget install.
-          # NOTE: winget is a native exe, so try/catch alone won't catch a non-zero
-          # exit. We must check $LASTEXITCODE explicitly and fall back if it failed.
-          $installed = $false
-          try {
-            winget install --id GitHub.Copilot.modernization.agent `
-              --silent `
-              --accept-package-agreements `
-              --accept-source-agreements `
-              --disable-interactivity
-            if ($LASTEXITCODE -eq 0) { $installed = $true }
-            else { Write-Host "winget exited with code $LASTEXITCODE" }
-          } catch {
-            Write-Host "winget threw: $_"
-          }
-
-          if (-not $installed) {
-            Write-Host "Falling back to PowerShell installer"
-            iex (irm 'https://raw.githubusercontent.com/microsoft/modernize-cli/main/scripts/install.ps1')
-          }
-
-          # Discover where modernize.exe actually landed. winget on hosted runners
-          # commonly drops shims under %LOCALAPPDATA%\Microsoft\WinGet\Links rather
-          # than the documented Programs\modernize\bin path.
-          $candidates = @(
-            (Join-Path $env:LOCALAPPDATA 'Programs\modernize\bin'),
-            (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),
-            'C:\Program Files\modernize\bin',
-            'C:\Program Files (x86)\modernize\bin'
-          )
-          $found = $candidates |
-            Where-Object { Test-Path (Join-Path $_ 'modernize.exe') } |
-            Select-Object -First 1
-
-          if (-not $found) {
-            Write-Host "modernize.exe not in known locations, scanning disk..."
-            $exe = Get-ChildItem -Path 'C:\' -Recurse -Filter 'modernize.exe' `
-              -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($exe) { $found = $exe.DirectoryName }
-          }
-
-          if (-not $found) { throw "modernize.exe not found after install" }
-
-          Write-Host "Adding to PATH: $found"
-          Add-Content $env:GITHUB_PATH $found
+          curl -fsSL https://raw.githubusercontent.com/microsoft/modernize-cli/main/scripts/install.sh | sh
 
       - name: Verify modernize CLI
-        shell: pwsh
         run: modernize --version
 
       - name: Verify gh CLI auth
-        shell: pwsh
         run: gh auth status
 
       - name: Resolve or create tracking issue
         id: issue
-        shell: pwsh
         env:
           REPO: ${{ github.repository }}
           INPUT_ISSUE: ${{ inputs.issue_number }}
         run: |
-          $repo = $env:REPO
-          $issue = $env:INPUT_ISSUE
-          if ([string]::IsNullOrWhiteSpace($issue)) {
-            $title = "Modernization assessment - $(Get-Date -Format yyyy-MM-dd)"
-            $body  = "Automated assessment run from workflow ``${{ github.workflow }}`` (run id ${{ github.run_id }})."
-            $url   = gh issue create --repo $repo --title $title --body $body
-          } else {
-            $url = "https://github.com/$repo/issues/$issue"
-          }
-          Write-Host "Tracking issue: $url"
-          "url=$url" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if [ -z "$INPUT_ISSUE" ]; then
+            TITLE="Modernization assessment - $(date +%Y-%m-%d)"
+            BODY="Automated assessment run from workflow \`${{ github.workflow }}\` (run id ${{ github.run_id }})."
+            URL=$(gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY")
+          else
+            URL="https://github.com/$REPO/issues/$INPUT_ISSUE"
+          fi
+          echo "Tracking issue: $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: Run headless assessment
-        shell: pwsh
         run: |
-          modernize assess `
-            --no-tty `
-            --format markdown `
-            --output-path ./reports/assessment `
+          modernize assess \
+            --no-tty \
+            --format markdown \
+            --output-path ./reports/assessment \
             --issue-url "${{ steps.issue.outputs.url }}"
 
       - name: Upload assessment report artifact
@@ -132,11 +81,20 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Upload Modernize CLI logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: modernize-logs
+          path: ~/.modernize/logs/
+          if-no-files-found: warn
+
       - name: Summary
         if: always()
-        shell: pwsh
         run: |
-          "## Modernization assessment" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "Tracking issue: ${{ steps.issue.outputs.url }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "Artifact: ``assessment-report``" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          {
+            echo "## Modernization assessment"
+            echo ""
+            echo "Tracking issue: ${{ steps.issue.outputs.url }}"
+            echo "Artifact: \`assessment-report\`"
+          } >> "$GITHUB_STEP_SUMMARY"
