@@ -43,7 +43,12 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/microsoft/modernize-cli/main/scripts/install.sh | sh
 
       - name: Verify modernize CLI
-        run: modernize --version
+        run: |
+          modernize --version
+          echo "----- modernize --help -----"
+          modernize --help || true
+          echo "----- modernize assess --help -----"
+          modernize assess --help || true
 
       - name: Verify gh CLI auth
         run: gh auth status
@@ -66,6 +71,9 @@ jobs:
 
       - name: Run headless assessment
         run: |
+          mkdir -p ./reports/assessment
+          # Marker so we can later list every file modernize wrote.
+          touch /tmp/_pre_assess_mark
           modernize assess \
             --no-tty \
             --source . \
@@ -73,12 +81,27 @@ jobs:
             --output-path ./reports/assessment \
             --issue-url "${{ steps.issue.outputs.url }}"
 
+      - name: Locate generated report
+        if: always()
+        run: |
+          echo "===== reports/ tree ====="
+          ls -laR reports || true
+          echo "===== ~/.modernize tree ====="
+          ls -laR "$HOME/.modernize" || true
+          echo "===== files modernize wrote anywhere under workspace or HOME ====="
+          find "$GITHUB_WORKSPACE" "$HOME" -newer /tmp/_pre_assess_mark \
+            \( -name '*.md' -o -name '*.html' -o -name '*.json' \) \
+            -not -path '*/node_modules/*' 2>/dev/null || true
+
       - name: Upload assessment report artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: assessment-report
-          path: reports/assessment
+          path: |
+            reports/assessment
+            ~/.modernize/**/*.md
+            ~/.modernize/**/*.html
           if-no-files-found: warn
           retention-days: 14
 
