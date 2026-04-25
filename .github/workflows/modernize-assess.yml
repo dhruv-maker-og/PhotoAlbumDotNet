@@ -39,19 +39,53 @@ jobs:
       - name: Install modernization agent (winget)
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+
           # Primary install path — silent winget install.
+          # NOTE: winget is a native exe, so try/catch alone won't catch a non-zero
+          # exit. We must check $LASTEXITCODE explicitly and fall back if it failed.
+          $installed = $false
           try {
             winget install --id GitHub.Copilot.modernization.agent `
               --silent `
               --accept-package-agreements `
-              --accept-source-agreements
+              --accept-source-agreements `
+              --disable-interactivity
+            if ($LASTEXITCODE -eq 0) { $installed = $true }
+            else { Write-Host "winget exited with code $LASTEXITCODE" }
           } catch {
-            Write-Host "winget install failed, falling back to PowerShell installer"
+            Write-Host "winget threw: $_"
+          }
+
+          if (-not $installed) {
+            Write-Host "Falling back to PowerShell installer"
             iex (irm 'https://raw.githubusercontent.com/microsoft/modernize-cli/main/scripts/install.ps1')
           }
-          # Make sure the install location is on PATH for subsequent steps.
-          $candidate = Join-Path $env:LOCALAPPDATA 'Programs\modernize\bin'
-          if (Test-Path $candidate) { Add-Content $env:GITHUB_PATH $candidate }
+
+          # Discover where modernize.exe actually landed. winget on hosted runners
+          # commonly drops shims under %LOCALAPPDATA%\Microsoft\WinGet\Links rather
+          # than the documented Programs\modernize\bin path.
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\modernize\bin'),
+            (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),
+            'C:\Program Files\modernize\bin',
+            'C:\Program Files (x86)\modernize\bin'
+          )
+          $found = $candidates |
+            Where-Object { Test-Path (Join-Path $_ 'modernize.exe') } |
+            Select-Object -First 1
+
+          if (-not $found) {
+            Write-Host "modernize.exe not in known locations, scanning disk..."
+            $exe = Get-ChildItem -Path 'C:\' -Recurse -Filter 'modernize.exe' `
+              -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($exe) { $found = $exe.DirectoryName }
+          }
+
+          if (-not $found) { throw "modernize.exe not found after install" }
+
+          Write-Host "Adding to PATH: $found"
+          Add-Content $env:GITHUB_PATH $found
 
       - name: Verify modernize CLI
         shell: pwsh
