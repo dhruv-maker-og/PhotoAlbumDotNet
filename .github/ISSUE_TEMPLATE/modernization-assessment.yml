@@ -1,0 +1,25 @@
+name: Modernization assessment
+description: Tracking issue for an automated modernization assessment run.
+title: "Modernization assessment - <date>"
+labels: ["modernization", "assessment"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is updated automatically by the **Modernize Assess (headless)** workflow.
+        The agent posts a summary of findings as a comment on this issue.
+  - type: input
+    id: target
+    attributes:
+      label: Target runtime / goal
+      description: e.g. ".NET 10", "Spring Boot 3", "Azure App Service"
+      placeholder: ".NET 10"
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Any additional context for reviewers.
+    validations:
+      required: false
