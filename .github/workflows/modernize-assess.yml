@@ -68,6 +68,7 @@ jobs:
         run: |
           modernize assess \
             --no-tty \
+            --source . \
             --format markdown \
             --output-path ./reports/assessment \
             --issue-url "${{ steps.issue.outputs.url }}"
